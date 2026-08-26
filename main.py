@@ -12,7 +12,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile
 )
 
-MAIN_BOT_TOKEN = "8772504288:AAHPWtDtzup1w9BC4QUrIZ5mAo_xZXVi2mY"  # ⚠️ O'zingizning bot tokeningizni kiriting
+MAIN_BOT_TOKEN = "8772504288:AAGbHPEjY7OcxWQ5dL90B5_poPbEPJ3MBfM"  # ⚠️ O'zingizning bot tokeningizni kiriting
 
 # --- ADMIN LOGIN VA PAROL ---
 ADMIN_LOGIN = "admin"
