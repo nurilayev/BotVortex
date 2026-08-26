@@ -73,7 +73,7 @@ async def init_db():
                 reply_text TEXT,
                 button_type TEXT DEFAULT 'reply',
                 url TEXT,
-                media_id TEXT,
+                media_path TEXT,
                 media_type TEXT DEFAULT 'text'
             )
         """)
@@ -108,7 +108,7 @@ async def init_db():
         for col_query in [
             "ALTER TABLE bot_buttons ADD COLUMN url TEXT",
             "ALTER TABLE bot_buttons ADD COLUMN button_type TEXT DEFAULT 'reply'",
-            "ALTER TABLE bot_buttons ADD COLUMN media_id TEXT",
+            "ALTER TABLE bot_buttons ADD COLUMN media_path TEXT",
             "ALTER TABLE bot_buttons ADD COLUMN media_type TEXT DEFAULT 'text'",
             "ALTER TABLE child_bot_users ADD COLUMN lang TEXT DEFAULT 'uz'",
             "ALTER TABLE child_bot_users ADD COLUMN is_banned INTEGER DEFAULT 0"
@@ -239,6 +239,10 @@ async def admin_execute_global_bc(message: types.Message, state: FSMContext):
                 await asyncio.sleep(0.03)
             except Exception:
                 pass
+        try:
+            await c_bot.session.close()
+        except Exception:
+            pass
 
     await message.answer(f"✅ **Global rassilka yakunlandi!**\nJami {success} ta foydalanuvchiga yetib bordi.", parse_mode="Markdown")
     await state.clear()
@@ -301,7 +305,7 @@ async def process_token(message: types.Message, state: FSMContext):
         await message.answer("❌ Bu token allaqachon mavjud yoki xatolik yuz berdi.")
     await state.clear()
 
-# --- FOYDALANUVCHI BOT BOSHQARUVI ---
+# --- FOYdALANUVCHI BOT BOSHQARUVI ---
 
 @main_dp.callback_query(F.data.startswith("manage_bot_"))
 async def manage_bot_handler(call: CallbackQuery):
@@ -435,7 +439,7 @@ async def process_btn_value(message: types.Message, state: FSMContext):
 
     async with aiosqlite.connect("constructor_database.db") as db:
         await db.execute(
-            "INSERT INTO bot_buttons (bot_token, button_name, reply_text, button_type, url, media_id, media_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO bot_buttons (bot_token, button_name, reply_text, button_type, url, media_path, media_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (token, btn_name, val if b_type == "reply" else "", b_type, val if b_type == "inline" else None, media_path, media_type)
         )
         await db.commit()
@@ -475,8 +479,8 @@ async def send_reply_to_user(message: types.Message, state: FSMContext):
     c_token = data.get("rep_token")
     u_id = int(data.get("rep_user_id"))
 
+    c_bot = Bot(token=c_token)
     try:
-        c_bot = Bot(token=c_token)
         reply_text = message.text or message.caption or "[Media]"
         if message.photo:
             await c_bot.send_photo(u_id, photo=message.photo[-1].file_id, caption=f"👨‍💻 <b>Admin:</b> {reply_text}", parse_mode="HTML")
@@ -489,6 +493,8 @@ async def send_reply_to_user(message: types.Message, state: FSMContext):
         await message.answer("✅ Javob yuborildi!")
     except Exception as e:
         await message.answer(f"❌ Xatolik: {e}")
+    finally:
+        await c_bot.session.close()
 
 @main_dp.callback_query(F.data.startswith("ban_"))
 async def ban_user_handler(call: CallbackQuery):
@@ -594,6 +600,11 @@ async def broadcast_get_msg(message: types.Message, state: FSMContext):
             await asyncio.sleep(0.04)
         except Exception:
             pass
+    try:
+        await c_bot.session.close()
+    except Exception:
+        pass
+
     await message.answer(f"📢 **Rassilka tugadi!** Yetib bordi: {success}", parse_mode="Markdown")
     await state.clear()
 
@@ -643,7 +654,7 @@ async def run_child_bot(token: str):
                 "ask_feedback": "Ákimge xabarıñızdı jazıñız:",
                 "feedback_sent": "✅ Xabarıñız ákimge jetkizildi!",
                 "unknown": "Bunday buyrıq yamasa kod tabılmadı.",
-                "banned": "🚫 Siz botta bloklangansız!"
+                "banned": "🚫 Siz botta bloklangansiz!"
             }
         }
 
@@ -706,28 +717,6 @@ async def run_child_bot(token: str):
             user_lang = row[0] if row else "uz"
             user_text = (msg.text or "").strip()
 
-            # KOD ORQALI FAYL/KINO QIDIRISH
-            async with aiosqlite.connect("constructor_database.db") as db:
-                async with db.execute("SELECT file_id, file_type, caption FROM bot_contents WHERE bot_token = ? AND LOWER(content_code) = LOWER(?)", (token, user_text)) as cursor:
-                    content_row = await cursor.fetchone()
-
-            if content_row:
-                f_id, f_type, f_cap = content_row[0], content_row[1], content_row[2]
-                try:
-                    if f_type == "photo":
-                        await msg.answer_photo(photo=f_id, caption=f_cap)
-                    elif f_type == "video":
-                        await msg.answer_video(video=f_id, caption=f_cap)
-                    elif f_type == "document":
-                        await msg.answer_document(document=f_id, caption=f_cap)
-                    elif f_type == "audio":
-                        await msg.answer_audio(audio=f_id, caption=f_cap)
-                    else:
-                        await msg.answer(f_cap)
-                except Exception:
-                    pass
-                return
-
             if user_text == TEXTS[user_lang]["lang_btn"]:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="🇺🇿 O'zbekcha", callback_data="set_lang_uz"),
@@ -739,77 +728,98 @@ async def run_child_bot(token: str):
                 return
 
             if user_text == TEXTS[user_lang]["feedback_btn"]:
-                await msg.answer(TEXTS[user_lang]["ask_feedback"])
                 await state.set_state(FeedbackState.waiting_for_msg)
+                await msg.answer(TEXTS[user_lang]["ask_feedback"])
                 return
 
-            async with aiosqlite.connect("constructor_database.db") as db:
-                async with db.execute(
-                    "SELECT reply_text, media_id, media_type FROM bot_buttons WHERE bot_token = ? AND LOWER(TRIM(button_name)) = LOWER(?) AND button_type = 'reply'", 
-                    (token, user_text)
-                ) as cursor:
-                    btn = await cursor.fetchone()
-
-            if btn:
-                reply_text, media_path, media_type = btn[0], btn[1], btn[2]
-                try:
-                    if media_type == "photo" and media_path and os.path.exists(media_path):
-                        await msg.answer_photo(photo=FSInputFile(media_path), caption=reply_text)
-                    elif media_type == "video" and media_path and os.path.exists(media_path):
-                        await msg.answer_video(video=FSInputFile(media_path), caption=reply_text)
-                    elif media_type == "document" and media_path and os.path.exists(media_path):
-                        await msg.answer_document(document=FSInputFile(media_path), caption=reply_text)
-                    elif reply_text:
-                        await msg.answer(reply_text)
-                except Exception:
-                    if reply_text:
-                        await msg.answer(reply_text)
-            else:
-                await msg.answer(TEXTS[user_lang]["unknown"])
-
-        @c_dp.message(FeedbackState.waiting_for_msg)
-        async def feedback_receiver(msg: types.Message, state: FSMContext):
-            async with aiosqlite.connect("constructor_database.db") as db:
-                async with db.execute("SELECT lang FROM child_bot_users WHERE bot_token = ? AND user_id = ?", (token, msg.from_user.id)) as cursor:
-                    row = await cursor.fetchone()
-                user_lang = row[0] if row else "uz"
-
-                async with db.execute("SELECT id, user_id, bot_name FROM user_bots WHERE bot_token = ?", (token,)) as cursor:
-                    admin_row = await cursor.fetchone()
-
-            if admin_row:
-                bot_db_id, admin_id, bot_name = admin_row[0], admin_row[1], admin_row[2]
+            # FSM: Adminga xabar yuborish
+            current_state = await state.get_state()
+            if current_state == FeedbackState.waiting_for_msg:
+                async with aiosqlite.connect("constructor_database.db") as db:
+                    async with db.execute("SELECT id, user_id FROM user_bots WHERE bot_token = ?", (token,)) as cursor:
+                        bot_info = await cursor.fetchone()
                 
-                reply_kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="💬 Javob berish", callback_data=f"rep_{bot_db_id}_{msg.from_user.id}")],
-                    [InlineKeyboardButton(text="🚫 Ban qilish", callback_data=f"ban_{bot_db_id}_{msg.from_user.id}")]
-                ])
-                
-                user_info = f"@{msg.from_user.username}" if msg.from_user.username else f"ID: {msg.from_user.id}"
-                text_to_send = f"📩 <b>Xabar ({bot_name} - {user_info}):</b>\n\n{msg.text or msg.caption or '[Media]'}"
+                if bot_info:
+                    bot_db_id, owner_id = bot_info
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="✍️ Javob yuborish", callback_data=f"rep_{bot_db_id}_{msg.from_user.id}"),
+                            InlineKeyboardButton(text="🚫 Ban qilish", callback_data=f"ban_{bot_db_id}_{msg.from_user.id}")
+                        ]
+                    ])
+                    try:
+                        await main_bot.send_message(
+                            owner_id,
+                            f"📩 <b>Yangi murojaat!</b>\n\n"
+                            f"👤 Foydalanuvchi: {msg.from_user.full_name} (@{msg.from_user.username or 'yoq'})\n"
+                            f"🆔 ID: <code>{msg.from_user.id}</code>\n\n"
+                            f"💬 Xabar: {user_text}",
+                            reply_markup=kb,
+                            parse_mode="HTML"
+                        )
+                        await msg.answer(TEXTS[user_lang]["feedback_sent"])
+                    except Exception:
+                        await msg.answer("❌ Xatolik yuz berdi.")
+                await state.clear()
+                return
 
-                try:
-                    await main_bot.send_message(admin_id, text_to_send, reply_markup=reply_kb, parse_mode="HTML")
-                except Exception:
-                    pass
+            # Reply tugma bosilganligini tekshirish
+            async with aiosqlite.connect("constructor_database.db") as db:
+                async with db.execute("SELECT reply_text, media_path, media_type FROM bot_buttons WHERE bot_token = ? AND button_name = ?", (token, user_text)) as cursor:
+                    btn_row = await cursor.fetchone()
 
-            await msg.answer(TEXTS[user_lang]["feedback_sent"])
-            await state.clear()
+            if btn_row:
+                r_text, m_path, m_type = btn_row
+                if m_type == "photo" and m_path and os.path.exists(m_path):
+                    await msg.answer_photo(FSInputFile(m_path), caption=r_text)
+                elif m_type == "video" and m_path and os.path.exists(m_path):
+                    await msg.answer_video(FSInputFile(m_path), caption=r_text)
+                elif m_type == "document" and m_path and os.path.exists(m_path):
+                    await msg.answer_document(FSInputFile(m_path), caption=r_text)
+                else:
+                    await msg.answer(r_text if r_text else "Ma'lumot mavjud emas.")
+                return
+
+            # Kino yoki fayl kodini tekshirish (Raqamli kodlar orqali qidirish)
+            async with aiosqlite.connect("constructor_database.db") as db:
+                async with db.execute("SELECT file_id, file_type, caption FROM bot_contents WHERE bot_token = ? AND content_code = ?", (token, user_text)) as cursor:
+                    content_row = await cursor.fetchone()
+
+            if content_row:
+                f_id, f_type, f_caption = content_row
+                if f_type == "photo":
+                    await msg.answer_photo(f_id, caption=f_caption)
+                elif f_type == "video":
+                    await msg.answer_video(f_id, caption=f_caption)
+                elif f_type == "document":
+                    await msg.answer_document(f_id, caption=f_caption)
+                elif f_type == "audio":
+                    await msg.answer_audio(f_id, caption=f_caption)
+                else:
+                    await msg.answer(f_caption or "Topildi.")
+                return
+
+            # Agar hech biri topilmasa
+            await msg.answer(TEXTS[user_lang]["unknown"])
 
         await c_dp.start_polling(c_bot)
     except Exception as e:
-        print(f"Child bot error ({token}): {e}")
+        logging.error(f"Child bot error ({token}): {e}")
 
-async def load_all_child_bots():
-    async with aiosqlite.connect("constructor_database.db") as db:
-        async with db.execute("SELECT bot_token FROM user_bots") as cursor:
-            bots = await cursor.fetchall()
-    for (token,) in bots:
-        asyncio.create_task(run_child_bot(token))
+# --- MAIN BOTNI ISHGA TUSHIRISH ---
 
 async def main():
     await init_db()
-    await load_all_child_bots()
+    
+    # Dastur ishga tushganda bazadagi barcha foydalanuvchi botlarini avtomatik ishga tushirish
+    async with aiosqlite.connect("constructor_database.db") as db:
+        async with db.execute("SELECT DISTINCT bot_token FROM user_bots") as cursor:
+            tokens = await cursor.fetchall()
+            for (token,) in tokens:
+                asyncio.create_task(run_child_bot(token))
+                logging.info(f"Bot ishga tushirildi: {token[:10]}...")
+
+    logging.info("🚀 Vortex712 Constructor Engine (Pro v3) ishga tushdi!")
     await main_dp.start_polling(main_bot)
 
 if __name__ == "__main__":
