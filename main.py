@@ -712,12 +712,13 @@ async def run_child_bot(token: str):
                 async with db.execute("SELECT lang, is_banned FROM child_bot_users WHERE bot_token = ? AND user_id = ?", (token, msg.from_user.id)) as cursor:
                     row = await cursor.fetchone()
             
+            lang = row[0] if row else "uz"
             if row and row[1] == 1:
+                await msg.answer(TEXTS[lang]["banned"])
                 return
-            user_lang = row[0] if row else "uz"
-            user_text = (msg.text or "").strip()
 
-            if user_text == TEXTS[user_lang]["lang_btn"]:
+            text = msg.text
+            if text == TEXTS[lang]["lang_btn"]:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="🇺🇿 O'zbekcha", callback_data="set_lang_uz"),
                      InlineKeyboardButton(text="🇷🇺 Русский", callback_data="set_lang_ru")],
@@ -727,45 +728,9 @@ async def run_child_bot(token: str):
                 await msg.answer("Tilni tanlang / Choose language:", reply_markup=kb)
                 return
 
-            if user_text == TEXTS[user_lang]["feedback_btn"]:
-                await state.set_state(FeedbackState.waiting_for_msg)
-                await msg.answer(TEXTS[user_lang]["ask_feedback"])
-                return
-
-            # FSM: Adminga xabar yuborish
-            current_state = await state.get_state()
-            if current_state == FeedbackState.waiting_for_msg:
-                async with aiosqlite.connect("constructor_database.db") as db:
-                    async with db.execute("SELECT id, user_id FROM user_bots WHERE bot_token = ?", (token,)) as cursor:
-                        bot_info = await cursor.fetchone()
-                
-                if bot_info:
-                    bot_db_id, owner_id = bot_info
-                    kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [
-                            InlineKeyboardButton(text="✍️ Javob yuborish", callback_data=f"rep_{bot_db_id}_{msg.from_user.id}"),
-                            InlineKeyboardButton(text="🚫 Ban qilish", callback_data=f"ban_{bot_db_id}_{msg.from_user.id}")
-                        ]
-                    ])
-                    try:
-                        await main_bot.send_message(
-                            owner_id,
-                            f"📩 <b>Yangi murojaat!</b>\n\n"
-                            f"👤 Foydalanuvchi: {msg.from_user.full_name} (@{msg.from_user.username or 'yoq'})\n"
-                            f"🆔 ID: <code>{msg.from_user.id}</code>\n\n"
-                            f"💬 Xabar: {user_text}",
-                            reply_markup=kb,
-                            parse_mode="HTML"
-                        )
-                        await msg.answer(TEXTS[user_lang]["feedback_sent"])
-                    except Exception:
-                        await msg.answer("❌ Xatolik yuz berdi.")
-                await state.clear()
-                return
-
-            # Reply tugma bosilganligini tekshirish
+            # Reply tugma bosilganda
             async with aiosqlite.connect("constructor_database.db") as db:
-                async with db.execute("SELECT reply_text, media_path, media_type FROM bot_buttons WHERE bot_token = ? AND button_name = ?", (token, user_text)) as cursor:
+                async with db.execute("SELECT reply_text, media_path, media_type FROM bot_buttons WHERE bot_token = ? AND button_name = ?", (token, text)) as cursor:
                     btn_row = await cursor.fetchone()
 
             if btn_row:
@@ -777,12 +742,12 @@ async def run_child_bot(token: str):
                 elif m_type == "document" and m_path and os.path.exists(m_path):
                     await msg.answer_document(FSInputFile(m_path), caption=r_text)
                 else:
-                    await msg.answer(r_text if r_text else "Ma'lumot mavjud emas.")
+                    await msg.answer(r_text if r_text else "Ma'lumot topilmadi.")
                 return
 
-            # Kino yoki fayl kodini tekshirish (Raqamli kodlar orqali qidirish)
+            # Kino / Fayl kodi bo'yicha qidirish
             async with aiosqlite.connect("constructor_database.db") as db:
-                async with db.execute("SELECT file_id, file_type, caption FROM bot_contents WHERE bot_token = ? AND content_code = ?", (token, user_text)) as cursor:
+                async with db.execute("SELECT file_id, file_type, caption FROM bot_contents WHERE bot_token = ? AND content_code = ?", (token, text)) as cursor:
                     content_row = await cursor.fetchone()
 
             if content_row:
@@ -796,31 +761,41 @@ async def run_child_bot(token: str):
                 elif f_type == "audio":
                     await msg.answer_audio(f_id, caption=f_caption)
                 else:
-                    await msg.answer(f_caption or "Topildi.")
+                    await msg.answer(f_caption)
                 return
 
-            # Agar hech biri topilmasa
-            await msg.answer(TEXTS[user_lang]["unknown"])
+            await msg.answer(TEXTS[lang]["unknown"])
 
         await c_dp.start_polling(c_bot)
     except Exception as e:
         logging.error(f"Child bot error ({token}): {e}")
 
-# --- MAIN BOTNI ISHGA TUSHIRISH ---
-
+# --- ASOSIY MAIN FUNKSIYASI VA ISHGA TUSHIRISH ---
 async def main():
     await init_db()
     
-    # Dastur ishga tushganda bazadagi barcha foydalanuvchi botlarini avtomatik ishga tushirish
+    tasks = []
+    # Bazadagi barcha foydalanuvchi botlarini o'qib olib ishga tushirish
     async with aiosqlite.connect("constructor_database.db") as db:
         async with db.execute("SELECT DISTINCT bot_token FROM user_bots") as cursor:
             tokens = await cursor.fetchall()
             for (token,) in tokens:
-                asyncio.create_task(run_child_bot(token))
+                tasks.append(run_child_bot(token))
                 logging.info(f"Bot ishga tushirildi: {token[:10]}...")
 
     logging.info("🚀 Vortex712 Constructor Engine (Pro v3) ishga tushdi!")
-    await main_dp.start_polling(main_bot)
+    
+    # Agar child botlar bo'lmasa, faqat asosiy bot ishlaydi (xatolik bermaydi)
+    if tasks:
+        await asyncio.gather(
+            main_dp.start_polling(main_bot),
+            *tasks
+        )
+    else:
+        await main_dp.start_polling(main_bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        logging.error(f"Kritik xatolik tufayli bot to'xtadi: {e}")
