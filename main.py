@@ -12,7 +12,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile
 )
 
-MAIN_BOT_TOKEN = "8772504288:AAGbHPEjY7OcxWQ5dL90B5_poPbEPJ3MBfM"  # ⚠️ O'zingizning bot tokeningizni kiriting
+MAIN_BOT_TOKEN = "8772504288:AAGpe_SVTkVH3epiJ0JTGvP2B3P4OEFJWGU"  # ⚠️ O'zingizning bot tokeningizni kiriting
 
 # --- ADMIN LOGIN VA PAROL ---
 ADMIN_LOGIN = "admin"
@@ -305,7 +305,7 @@ async def process_token(message: types.Message, state: FSMContext):
         await message.answer("❌ Bu token allaqachon mavjud yoki xatolik yuz berdi.")
     await state.clear()
 
-# --- FOYdALANUVCHI BOT BOSHQARUVI ---
+# --- FOYDALANUVCHI BOT BOSHQARUVI ---
 
 @main_dp.callback_query(F.data.startswith("manage_bot_"))
 async def manage_bot_handler(call: CallbackQuery):
